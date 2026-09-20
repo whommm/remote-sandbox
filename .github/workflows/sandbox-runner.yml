@@ -55,6 +55,7 @@ jobs:
       - name: Prepare and Execute Script
         shell: bash
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TASK_NAME: ${{ inputs.task_name }}
           RUNNER_TYPE: ${{ inputs.runner_type }}
           SCRIPT_BASE64: ${{ inputs.script_base64 }}
