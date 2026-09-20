@@ -1,0 +1,116 @@
+name: Cloud Sandbox Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_name:
+        description: 'Task Name / Tag'
+        required: true
+        default: 'sandbox-task'
+      runner_type:
+        description: 'Execution Type (python, bash, node)'
+        required: true
+        default: 'python'
+      script_base64:
+        description: 'Base64 Encoded Script Content'
+        required: false
+        default: ''
+      script_url:
+        description: 'Remote Script Download URL (optional)'
+        required: false
+        default: ''
+      args:
+        description: 'Extra CLI Arguments'
+        required: false
+        default: ''
+
+jobs:
+  run-sandbox-task:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Common Dependencies
+        shell: bash
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg jq curl wget unzip
+          pip install requests playwright httpx urllib3
+          playwright install --with-deps chromium || true
+          mkdir -p workspace_run output
+
+      - name: Prepare and Execute Script
+        shell: bash
+        env:
+          TASK_NAME: ${{ inputs.task_name }}
+          RUNNER_TYPE: ${{ inputs.runner_type }}
+          SCRIPT_BASE64: ${{ inputs.script_base64 }}
+          SCRIPT_URL: ${{ inputs.script_url }}
+          TASK_ARGS: ${{ inputs.args }}
+        run: |
+          cd workspace_run
+          
+          if [ -n "$SCRIPT_BASE64" ]; then
+            echo "Decoding base64 script..."
+            echo "$SCRIPT_BASE64" | base64 -d > user_script
+          elif [ -n "$SCRIPT_URL" ]; then
+            echo "Downloading script from URL: $SCRIPT_URL..."
+            curl -sSL "$SCRIPT_URL" -o user_script
+          else
+            echo "No script provided, running default echo task."
+            echo "print('Default sandbox worker online!')" > user_script
+          fi
+          
+          echo "=== Executing Task: $TASK_NAME ($RUNNER_TYPE) ==="
+          START_TIME=$(date +%s)
+          
+          if [ "$RUNNER_TYPE" = "python" ]; then
+            python3 user_script $TASK_ARGS
+          elif [ "$RUNNER_TYPE" = "bash" ]; then
+            chmod +x user_script
+            bash user_script $TASK_ARGS
+          elif [ "$RUNNER_TYPE" = "node" ]; then
+            node user_script $TASK_ARGS
+          else
+            echo "Unknown runner type: $RUNNER_TYPE"
+            exit 1
+          fi
+          
+          EXIT_CODE=$?
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          echo "Task finished in ${DURATION}s with exit code ${EXIT_CODE}"
+          
+          if [ -d "output" ]; then
+            cp -r output/* ../output/ 2>/dev/null || true
+          fi
+          
+          exit $EXIT_CODE
+
+      - name: Upload Output Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-output-${{ inputs.task_name }}
+          path: |
+            output/
+            workspace_run/*.json
+            workspace_run/*.png
+            workspace_run/*.mp4
+            workspace_run/*.zip
+            workspace_run/*.txt
+            workspace_run/*.csv
+          if-no-files-found: ignore
