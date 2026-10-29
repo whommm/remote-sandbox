@@ -759,5 +759,78 @@ bpy.context.view_layer.update()
 
 # ----------------------------------------------------------------------------- render
 scene.render.threads_mode = 'AUTO'
-bpy.ops.render.render(write_still=True)
-print('RENDER_DONE', OUT)
+
+if '--animate' in argv:
+    import os as _os
+    ANIM_FRAMES = int(arg('--frames', 36))
+    FSTART = int(arg('--fstart', 0))
+    FEND = int(arg('--fend', ANIM_FRAMES))
+    FPS = int(arg('--fps', 12))
+    OUTPAT = arg('--outpat', 'frames/f_')
+    _os.makedirs(_os.path.dirname(OUTPAT) or '.', exist_ok=True)
+
+    door_prev = {}
+    rain_objs = [o for o in bpy.data.objects if o.name.startswith('rain')]
+    door_l = bpy.data.objects.get('door_glass_0')
+    door_r = bpy.data.objects.get('door_glass_1')
+    door_lb = bpy.data.objects.get('door_bar_0')
+    door_rb = bpy.data.objects.get('door_bar_1')
+    door_l2 = bpy.data.objects.get('door_bar2_0')
+    door_r2 = bpy.data.objects.get('door_bar2_1')
+    sign_bsdf = None
+    for n in M_signface.node_tree.nodes:
+        if n.type == 'BSDF_PRINCIPLED':
+            sign_bsdf = n
+    tl_green = bpy.data.objects.get('tl_lens')
+    # camera orbit parameters (Z-up world)
+    base_az = math.atan2(CAM_POS.y - CAM_TGT.y, CAM_POS.x - CAM_TGT.x)
+    base_dist = (CAM_POS - CAM_TGT).length
+    base_el = math.asin((CAM_POS.z - CAM_TGT.z) / base_dist)
+
+    scene.render.fps = FPS
+    for f in range(FSTART, FEND):
+        t = f / FPS
+        # --- rain fall + wrap
+        for i, ro in enumerate(rain_objs):
+            ro.location.z -= (5.5 + (i % 7) * 0.35) / FPS
+            if ro.location.z < 0.05:
+                ro.location.z += 9.5
+        # --- automatic door: open 4.0-7.0s of a 11s cycle
+        cyc = t % 11.0
+        k = 0.0
+        if 3.2 < cyc < 7.4:
+            a = cyc - 3.2
+            b = 7.4 - cyc
+            k = min(1.0, a / 0.85, b / 0.85)
+            k = k * k * (3 - 2 * k)
+        for ob, sgn in ((door_l, -1), (door_r, 1), (door_lb, -1), (door_rb, 1), (door_l2, -1), (door_r2, 1)):
+            if ob is not None:
+                prev = door_prev.get(ob.name, 0.0)
+                ob.location.x += sgn * 0.44 * (k - prev)
+                door_prev[ob.name] = k
+        # --- sign flicker
+        flick = 0.45 + 0.035 * math.sin(t * 13.7) * math.sin(t * 4.3)
+        if math.sin(t * 0.37) > 0.994:
+            flick *= 0.7
+        if sign_bsdf is not None:
+            for nm in ('Emission Strength',):
+                if nm in sign_bsdf.inputs:
+                    sign_bsdf.inputs[nm].default_value = flick
+        # --- traffic light blink
+        if tl_green is not None:
+            tl_green.data.materials[0] = M_red_light if (t % 16) > 9.5 else M_green
+        # --- slow camera orbit
+        az = base_az + 0.10 * math.sin(t * 0.35)
+        r = base_dist * (1.0 - 0.03 * math.sin(t * 0.3))
+        cam.location = (CAM_TGT.x + r * math.cos(base_el) * math.cos(az),
+                        CAM_TGT.y + r * math.cos(base_el) * math.sin(az),
+                        CAM_TGT.z + r * math.sin(base_el))
+        cam.rotation_euler = (CAM_TGT - cam.location).to_track_quat('-Z', 'Y').to_euler()
+
+        scene.render.filepath = OUTPAT + str(f).zfill(4) + '.png'
+        bpy.ops.render.render(write_still=True)
+        print('FRAME', f, 'done')
+    print('ANIM_DONE', FSTART, FEND)
+else:
+    bpy.ops.render.render(write_still=True)
+    print('RENDER_DONE', OUT)
